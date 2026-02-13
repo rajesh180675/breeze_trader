@@ -1,25 +1,24 @@
 """
-Instrument Configuration & Application Constants
-================================================
-All configuration, instruments, constants in one place.
-Zero external dependencies except stdlib.
+Configuration — instruments, expiry logic, session state defaults.
+FIXED: Handles None values in normalize_option_type
+ENHANCED: Added better validation and error handling
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 from dataclasses import dataclass
 import pytz
+
+IST = pytz.timezone("Asia/Kolkata")
 
 # ═══════════════════════════════════════════════════════════════════
 # TIMEZONE & DATE CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════
 
-IST = pytz.timezone("Asia/Kolkata")
-
 # Market timings (IST)
-MARKET_PRE_OPEN_START = (9, 0)   # 9:00 AM
-MARKET_OPEN = (9, 15)             # 9:15 AM
-MARKET_CLOSE = (15, 30)           # 3:30 PM
+MARKET_PRE_OPEN_START = (9, 0)
+MARKET_OPEN = (9, 15)
+MARKET_CLOSE = (15, 30)
 
 # Session configuration
 SESSION_TIMEOUT_SECONDS = 28800  # 8 hours
@@ -48,13 +47,12 @@ class InstrumentConfig:
     min_strike: int = 0
     max_strike: int = 999999
 
-# All supported instruments
 INSTRUMENTS: Dict[str, InstrumentConfig] = {
     "NIFTY": InstrumentConfig(
         display_name="NIFTY",
         api_code="NIFTY",
         exchange="NFO",
-        lot_size=25,
+        lot_size=65,
         tick_size=0.05,
         strike_gap=50,
         expiry_day="Tuesday",
@@ -100,12 +98,12 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
     ),
     "SENSEX": InstrumentConfig(
         display_name="SENSEX",
-        api_code="BSESEN",  # Critical: API uses BSESEN not SENSEX
+        api_code="BSESEN",
         exchange="BFO",
-        lot_size=10,
+        lot_size=20,
         tick_size=0.05,
         strike_gap=100,
-        expiry_day="Thursday",  # Confirmed: Thursday expiry
+        expiry_day="Thursday",
         description="BSE SENSEX",
         min_strike=50000,
         max_strike=100000
@@ -124,80 +122,24 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
     ),
 }
 
-# Day number mapping for expiry calculations
 DAY_NUM = {
-    "Monday": 0,
-    "Tuesday": 1,
-    "Wednesday": 2,
-    "Thursday": 3,
-    "Friday": 4,
-    "Saturday": 5,
-    "Sunday": 6
+    "Monday": 0, "Tuesday": 1, "Wednesday": 2,
+    "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6
 }
-
-# ═══════════════════════════════════════════════════════════════════
-# APPLICATION CONSTANTS
-# ═══════════════════════════════════════════════════════════════════
-
-# Activity log limits
-MAX_ACTIVITY_LOG_ENTRIES = 100
-
-# Display limits
-MAX_STRIKES_TO_DISPLAY = 50
-DEFAULT_STRIKES_TO_DISPLAY = 15
-
-# Order limits
-MAX_LOTS_PER_ORDER = 1000
-MIN_LOTS_PER_ORDER = 1
-
-# Formatting
-CURRENCY_FORMATS = {
-    'crore': 1e7,
-    'lakh': 1e5,
-    'thousand': 1e3
-}
-
-# Greeks calculation constants
-RISK_FREE_RATE = 0.065  # 6.5% annual
-DAYS_PER_YEAR = 365
 
 # ═══════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════
 
 def get_instrument(name: str) -> InstrumentConfig:
-    """
-    Get instrument configuration by display name.
-    
-    Args:
-        name: Instrument display name (e.g., 'NIFTY', 'SENSEX')
-    
-    Returns:
-        InstrumentConfig object
-    
-    Raises:
-        KeyError: If instrument not found
-    """
+    """Get instrument configuration by display name."""
     if name not in INSTRUMENTS:
         raise KeyError(f"Unknown instrument: {name}")
     return INSTRUMENTS[name]
 
 
 def get_next_expiries(instrument_name: str, count: int = 5) -> List[str]:
-    """
-    Calculate next N weekly expiry dates for an instrument.
-    
-    Args:
-        instrument_name: Name of instrument (e.g., 'NIFTY')
-        count: Number of expiries to return
-    
-    Returns:
-        List of expiry dates as 'YYYY-MM-DD' strings
-    
-    Example:
-        >>> get_next_expiries('NIFTY', 3)
-        ['2026-02-17', '2026-02-24', '2026-03-03']
-    """
+    """Calculate next N weekly expiry dates for an instrument."""
     try:
         inst = get_instrument(instrument_name)
     except KeyError:
@@ -206,16 +148,9 @@ def get_next_expiries(instrument_name: str, count: int = 5) -> List[str]:
     target_day = DAY_NUM[inst.expiry_day]
     now = datetime.now(IST)
     
-    # Calculate days ahead to next expiry
     days_ahead = (target_day - now.weekday()) % 7
+    next_expiry = now if days_ahead == 0 else now + timedelta(days=days_ahead)
     
-    # If today is expiry day and market is still open, include today
-    if days_ahead == 0:
-        next_expiry = now
-    else:
-        next_expiry = now + timedelta(days=days_ahead)
-    
-    # Generate list of expiries
     expiries = []
     for i in range(count):
         expiry_date = next_expiry + timedelta(weeks=i)
@@ -228,92 +163,100 @@ def api_code_to_display(api_code: str) -> str:
     """
     Convert API stock code to display name.
     
-    Args:
-        api_code: API stock code (e.g., 'BSESEN')
-    
-    Returns:
-        Display name (e.g., 'SENSEX')
-    
-    Example:
-        >>> api_code_to_display('BSESEN')
-        'SENSEX'
+    FIXED: Returns original code if not found (instead of raising error)
     """
+    if not api_code:
+        return ""
+    
     for name, config in INSTRUMENTS.items():
         if config.api_code == api_code:
             return name
-    return api_code  # Return as-is if not found
+    
+    # Return original if not found
+    return api_code
 
 
-def normalize_option_type(option_str: str) -> str:
+def normalize_option_type(option_str: Optional[str]) -> str:
     """
     Normalize option type to CE/PE format.
     
+    FIXED: Properly handles None, empty strings, and invalid values
+    
     Args:
         option_str: Any variant ('call', 'Call', 'CE', 'c', 'put', 'Put', 'PE', 'p')
+                    Can be None (for equity positions)
     
     Returns:
-        'CE' or 'PE'
-    
-    Example:
-        >>> normalize_option_type('call')
-        'CE'
-        >>> normalize_option_type('Put')
-        'PE'
+        'CE', 'PE', or 'N/A' for non-options
     """
+    # Handle None and empty strings
+    if option_str is None or option_str == "":
+        return "N/A"
+    
+    # Convert to string and normalize
     s = str(option_str).strip().lower()
     
+    # Handle empty after strip
+    if not s:
+        return "N/A"
+    
+    # Map to CE/PE
     if s in ('call', 'ce', 'c'):
         return 'CE'
     elif s in ('put', 'pe', 'p'):
         return 'PE'
     else:
-        # Return uppercased original if unknown
-        return option_str.upper()
+        # Return uppercased original for unknown types
+        return str(option_str).upper()
+
+
+def is_option_position(position: Dict) -> bool:
+    """
+    Check if a position is an option position (not equity).
+    
+    NEW: Helper to filter out equity positions
+    
+    Args:
+        position: Position dictionary from API
+    
+    Returns:
+        True if option position, False if equity
+    """
+    # Check product type
+    product_type = str(position.get("product_type", "")).lower()
+    if product_type == "options":
+        return True
+    
+    # Check segment
+    segment = str(position.get("segment", "")).lower()
+    if segment == "fno":
+        return True
+    
+    # Check if has option-specific fields
+    if position.get("right") is not None and position.get("strike_price") is not None:
+        return True
+    
+    return False
 
 
 def validate_strike(instrument_name: str, strike: int) -> bool:
-    """
-    Validate if strike price is valid for instrument.
-    
-    Args:
-        instrument_name: Instrument name
-        strike: Strike price to validate
-    
-    Returns:
-        True if valid, False otherwise
-    """
+    """Validate if strike price is valid for instrument."""
     try:
         inst = get_instrument(instrument_name)
         
-        # Check if within bounds
         if strike < inst.min_strike or strike > inst.max_strike:
             return False
         
-        # Check if it's a valid strike (multiple of gap)
         if strike % inst.strike_gap != 0:
             return False
         
         return True
-    
     except KeyError:
         return False
 
 
 def round_to_tick(price: float, instrument_name: str) -> float:
-    """
-    Round price to valid tick size for instrument.
-    
-    Args:
-        price: Price to round
-        instrument_name: Instrument name
-    
-    Returns:
-        Rounded price
-    
-    Example:
-        >>> round_to_tick(100.12, 'NIFTY')
-        100.10
-    """
+    """Round price to valid tick size for instrument."""
     try:
         inst = get_instrument(instrument_name)
         tick = inst.tick_size
@@ -323,19 +266,12 @@ def round_to_tick(price: float, instrument_name: str) -> float:
 
 
 def is_market_open() -> bool:
-    """
-    Check if market is currently open.
-    
-    Returns:
-        True if market open, False otherwise
-    """
+    """Check if market is currently open."""
     now = datetime.now(IST)
     
-    # Weekend check
-    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+    if now.weekday() >= 5:
         return False
     
-    # Time check
     open_time = now.replace(
         hour=MARKET_OPEN[0],
         minute=MARKET_OPEN[1],
@@ -354,58 +290,58 @@ def is_market_open() -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# APPLICATION CONSTANTS
+# ═══════════════════════════════════════════════════════════════════
+
+MAX_ACTIVITY_LOG_ENTRIES = 100
+MAX_STRIKES_TO_DISPLAY = 50
+DEFAULT_STRIKES_TO_DISPLAY = 15
+MAX_LOTS_PER_ORDER = 1000
+MIN_LOTS_PER_ORDER = 1
+
+CURRENCY_FORMATS = {
+    'crore': 1e7,
+    'lakh': 1e5,
+    'thousand': 1e3
+}
+
+RISK_FREE_RATE = 0.065
+DAYS_PER_YEAR = 365
+
+
+# ═══════════════════════════════════════════════════════════════════
 # ERROR MESSAGES
 # ═══════════════════════════════════════════════════════════════════
 
 class ErrorMessages:
     """Centralized error messages."""
-    
-    # Connection errors
     NOT_CONNECTED = "Not connected to Breeze API"
     CONNECTION_FAILED = "Failed to connect: {error}"
     SESSION_EXPIRED = "Session has expired. Please reconnect"
-    
-    # Validation errors
     INVALID_STRIKE = "Invalid strike price for {instrument}"
     INVALID_QUANTITY = "Quantity must be between {min} and {max} lots"
     INVALID_PRICE = "Price must be positive"
     INVALID_INSTRUMENT = "Unknown instrument: {instrument}"
-    
-    # Order errors
     ORDER_FAILED = "Order placement failed: {error}"
     CANCEL_FAILED = "Order cancellation failed: {error}"
     MODIFY_FAILED = "Order modification failed: {error}"
-    
-    # Data errors
     NO_DATA = "No data available"
     FETCH_FAILED = "Failed to fetch data: {error}"
     PARSE_FAILED = "Failed to parse response: {error}"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# COLOR SCHEME
-# ═══════════════════════════════════════════════════════════════════
-
 class Colors:
     """Application color scheme."""
-    
-    # Status colors
     SUCCESS = "#28a745"
     WARNING = "#ffc107"
     ERROR = "#dc3545"
     INFO = "#2196F3"
-    
-    # P&L colors
     PROFIT = "#28a745"
     LOSS = "#dc3545"
     NEUTRAL = "#6c757d"
-    
-    # Market status
     MARKET_OPEN = "#28a745"
     MARKET_CLOSED = "#dc3545"
     PRE_MARKET = "#ffc107"
-    
-    # UI elements
     PRIMARY = "#1f77b4"
     SECONDARY = "#2ecc71"
     ACCENT = "#9b59b6"
