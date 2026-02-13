@@ -48,7 +48,7 @@ class InstrumentConfig:
 
 INSTRUMENTS: Dict[str, InstrumentConfig] = {
     "NIFTY": InstrumentConfig(
-        "NIFTY", "NIFTY", "NFO", 65, 0.05, 50, "Thursday",
+        "NIFTY", "NIFTY", "NFO", 65, 0.05, 50, "Tuesday",
         "NIFTY 50 Index", "NIFTY", "NSE", 15000, 30000),
     "BANKNIFTY": InstrumentConfig(
         "BANKNIFTY", "BANKNIFTY", "NFO", 15, 0.05, 100, "Wednesday",
@@ -60,8 +60,8 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
         "MIDCPNIFTY", "MIDCPNIFTY", "NFO", 50, 0.05, 25, "Monday",
         "NIFTY Midcap Select", "MIDCPNIFTY", "NSE", 8000, 20000),
     "SENSEX": InstrumentConfig(
-        "SENSEX", "BSESEN", "BFO", 20, 0.05, 100, "Friday",
-        "BSE SENSEX", "SENSEX", "BSE", 50000, 100000),
+        "SENSEX", "BSESEN", "BFO", 20, 0.05, 100, "Thursday",
+        "BSE SENSEX", "BSESEN", "BSE", 50000, 100000),
     "BANKEX": InstrumentConfig(
         "BANKEX", "BANKEX", "BFO", 15, 0.05, 100, "Monday",
         "BSE BANKEX", "BANKEX", "BSE", 40000, 80000),
