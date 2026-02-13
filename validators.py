@@ -1,9 +1,7 @@
-"""
-Input Validation using Pydantic.
-"""
+"""Input validation with Pydantic."""
 
 from pydantic import BaseModel, validator, Field
-from typing import Optional, Literal
+from typing import Literal
 from datetime import date
 import app_config as C
 
@@ -19,7 +17,8 @@ class OrderRequest(BaseModel):
 
     @validator('instrument')
     def validate_instrument(cls, v):
-        if v not in C.INSTRUMENTS: raise ValueError(f"Unknown: {v}")
+        if v not in C.INSTRUMENTS:
+            raise ValueError(f"Unknown: {v}")
         return v
 
     @validator('strike')
@@ -35,27 +34,9 @@ class OrderRequest(BaseModel):
         return v
 
 
-class QuoteRequest(BaseModel):
-    instrument: str
-    strike: int = Field(gt=0)
-    option_type: Literal['CE', 'PE']
-    expiry: str
-
-
-class OptionChainRequest(BaseModel):
-    instrument: str
-    expiry: str
-    strikes_count: int = Field(default=15, ge=5, le=50)
-
-
-class SquareOffRequest(BaseModel):
-    position_id: str
-    quantity: int = Field(gt=0)
-    order_type: Literal['market', 'limit'] = 'market'
-    price: float = Field(default=0, ge=0)
-
-
 def validate_date_range(from_date: date, to_date: date) -> bool:
-    if from_date > to_date: raise ValueError("From date cannot be after To date")
-    if (to_date - from_date).days > 90: raise ValueError("Range cannot exceed 90 days")
+    if from_date > to_date:
+        raise ValueError("From date cannot be after To date")
+    if (to_date - from_date).days > 90:
+        raise ValueError("Range cannot exceed 90 days")
     return True
