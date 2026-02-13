@@ -1,5 +1,6 @@
 """
 Configuration — instruments, expiry logic, constants.
+All pure logic. No external dependencies.
 """
 
 from datetime import datetime, timedelta
@@ -9,22 +10,25 @@ import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Market timings
 MARKET_PRE_OPEN_START = (9, 0)
 MARKET_OPEN = (9, 15)
 MARKET_CLOSE = (15, 30)
 
-# Session
 SESSION_TIMEOUT_SECONDS = 28800
 SESSION_WARNING_SECONDS = 25200
 
-# Cache TTLs
 OC_CACHE_TTL_SECONDS = 30
 QUOTE_CACHE_TTL_SECONDS = 5
 POSITION_CACHE_TTL_SECONDS = 10
 FUNDS_CACHE_TTL_SECONDS = 60
+SPOT_CACHE_TTL_SECONDS = 30
 
-# ═══════════════════════════════════════════════════════════════════
+MAX_ACTIVITY_LOG_ENTRIES = 100
+MAX_LOTS_PER_ORDER = 1000
+MIN_LOTS_PER_ORDER = 1
+RISK_FREE_RATE = 0.065
+DAYS_PER_YEAR = 365
+
 
 @dataclass(frozen=True)
 class InstrumentConfig:
@@ -36,21 +40,35 @@ class InstrumentConfig:
     strike_gap: int
     expiry_day: Literal['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
     description: str
+    spot_code: str = ""
+    spot_exchange: str = ""
     min_strike: int = 0
     max_strike: int = 999999
 
+
 INSTRUMENTS: Dict[str, InstrumentConfig] = {
-    "NIFTY": InstrumentConfig("NIFTY", "NIFTY", "NFO", 65, 0.05, 50, "Thursday", "NIFTY 50 Index", 15000, 30000),
-    "BANKNIFTY": InstrumentConfig("BANKNIFTY", "BANKNIFTY", "NFO", 15, 0.05, 100, "Wednesday", "Bank NIFTY Index", 30000, 60000),
-    "FINNIFTY": InstrumentConfig("FINNIFTY", "FINNIFTY", "NFO", 25, 0.05, 50, "Tuesday", "NIFTY Financial Services", 15000, 30000),
-    "MIDCPNIFTY": InstrumentConfig("MIDCPNIFTY", "MIDCPNIFTY", "NFO", 50, 0.05, 25, "Monday", "NIFTY Midcap Select", 8000, 20000),
-    "SENSEX": InstrumentConfig("SENSEX", "BSESEN", "BFO", 20, 0.05, 100, "Friday", "BSE SENSEX", 50000, 100000),
-    "BANKEX": InstrumentConfig("BANKEX", "BANKEX", "BFO", 15, 0.05, 100, "Monday", "BSE BANKEX", 40000, 80000),
+    "NIFTY": InstrumentConfig(
+        "NIFTY", "NIFTY", "NFO", 65, 0.05, 50, "Thursday",
+        "NIFTY 50 Index", "NIFTY", "NSE", 15000, 30000),
+    "BANKNIFTY": InstrumentConfig(
+        "BANKNIFTY", "BANKNIFTY", "NFO", 15, 0.05, 100, "Wednesday",
+        "Bank NIFTY Index", "CNXBAN", "NSE", 30000, 60000),
+    "FINNIFTY": InstrumentConfig(
+        "FINNIFTY", "FINNIFTY", "NFO", 25, 0.05, 50, "Tuesday",
+        "NIFTY Financial Services", "FINNIFTY", "NSE", 15000, 30000),
+    "MIDCPNIFTY": InstrumentConfig(
+        "MIDCPNIFTY", "MIDCPNIFTY", "NFO", 50, 0.05, 25, "Monday",
+        "NIFTY Midcap Select", "MIDCPNIFTY", "NSE", 8000, 20000),
+    "SENSEX": InstrumentConfig(
+        "SENSEX", "BSESEN", "BFO", 20, 0.05, 100, "Friday",
+        "BSE SENSEX", "SENSEX", "BSE", 50000, 100000),
+    "BANKEX": InstrumentConfig(
+        "BANKEX", "BANKEX", "BFO", 15, 0.05, 100, "Monday",
+        "BSE BANKEX", "BANKEX", "BSE", 40000, 80000),
 }
 
 DAY_NUM = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4}
 
-# ═══════════════════════════════════════════════════════════════════
 
 def get_instrument(name: str) -> InstrumentConfig:
     if name not in INSTRUMENTS:
@@ -79,6 +97,12 @@ def api_code_to_display(api_code: str) -> str:
         if config.api_code == api_code:
             return name
     return api_code
+
+
+def display_to_api_code(display_name: str) -> str:
+    if display_name in INSTRUMENTS:
+        return INSTRUMENTS[display_name].api_code
+    return display_name
 
 
 def normalize_option_type(option_str: Optional[str]) -> str:
@@ -127,16 +151,6 @@ def is_market_open() -> bool:
     o = now.replace(hour=MARKET_OPEN[0], minute=MARKET_OPEN[1], second=0)
     c = now.replace(hour=MARKET_CLOSE[0], minute=MARKET_CLOSE[1], second=0)
     return o <= now <= c
-
-
-# ═══════════════════════════════════════════════════════════════════
-
-MAX_ACTIVITY_LOG_ENTRIES = 100
-MAX_LOTS_PER_ORDER = 1000
-MIN_LOTS_PER_ORDER = 1
-RISK_FREE_RATE = 0.065
-DAYS_PER_YEAR = 365
-CURRENCY_FORMATS = {'crore': 1e7, 'lakh': 1e5, 'thousand': 1e3}
 
 
 class ErrorMessages:
