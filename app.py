@@ -1,7 +1,6 @@
 """
 Breeze Options Trader v8.0 — Main Application
-Fixes: retry logic, double-click protection, real spot prices,
-       persistent trade logging, background risk monitoring.
+Fixes: Token validation length, API Key fetching debug, connection retry logic.
 """
 
 import streamlit as st
@@ -56,66 +55,16 @@ st.set_page_config(
 )
 
 st.markdown("""<style>
-.page-header {
-    font-size: 2rem;
-    font-weight: 700;
-    color: #1f77b4;
-    border-bottom: 4px solid #1f77b4;
-    padding-bottom: 0.5rem;
-    margin-bottom: 1.5rem;
-}
-.section-header {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: #2c3e50;
-    margin: 1.5rem 0 1rem;
-}
-.status-connected {
-    background: #d4edda;
-    color: #155724;
-    padding: 6px 14px;
-    border-radius: 16px;
-    font-weight: 600;
-    display: inline-block;
-}
-.profit {
-    color: #28a745 !important;
-    font-weight: 700;
-}
-.loss {
-    color: #dc3545 !important;
-    font-weight: 700;
-}
-.info-box {
-    background: #e7f3ff;
-    border-left: 5px solid #2196F3;
-    padding: 1rem;
-    margin: 1rem 0;
-    border-radius: 0 8px 8px 0;
-}
-.danger-box {
-    background: #f8d7da;
-    border-left: 5px solid #dc3545;
-    padding: 1rem;
-    margin: 1rem 0;
-    border-radius: 0 8px 8px 0;
-}
-.metric-card {
-    background: #f8f9fa;
-    padding: 1.25rem;
-    border-radius: 8px;
-    border: 1px solid #dee2e6;
-}
-.empty-state {
-    text-align: center;
-    padding: 3rem 1rem;
-    color: #6c757d;
-}
-.empty-state-icon {
-    font-size: 4rem;
-    margin-bottom: 1rem;
-    opacity: 0.5;
-}
+.page-header {font-size: 2rem; font-weight: 700; color: #1f77b4; border-bottom: 4px solid #1f77b4; padding-bottom: 0.5rem; margin-bottom: 1.5rem;}
+.section-header {font-size: 1.5rem; font-weight: 600; color: #2c3e50; margin: 1.5rem 0 1rem;}
+.status-connected {background: #d4edda; color: #155724; padding: 6px 14px; border-radius: 16px; font-weight: 600; display: inline-block;}
+.profit {color: #28a745 !important; font-weight: 700;}
+.loss {color: #dc3545 !important; font-weight: 700;}
+.info-box {background: #e7f3ff; border-left: 5px solid #2196F3; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0;}
+.danger-box {background: #f8d7da; border-left: 5px solid #dc3545; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0;}
+.metric-card {background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border: 1px solid #dee2e6;}
+.empty-state {text-align: center; padding: 3rem 1rem; color: #6c757d;}
+.empty-state-icon {font-size: 4rem; margin-bottom: 1rem; opacity: 0.5;}
 #MainMenu {visibility: hidden}
 footer {visibility: hidden}
 header {visibility: hidden}
@@ -362,19 +311,21 @@ def render_sidebar():
                 st.rerun()
 
         else:
-            # Login Form Logic
             has_secrets = Credentials.has_stored_credentials()
             
             if has_secrets:
                 st.markdown("### 🔑 Daily Login")
-                st.info("API Keys found in secrets")
+                st.success("✅ API Keys loaded from secrets")
+                
                 with st.form("quick_login"):
                     tok = st.text_input(
                         "Session Token", type="password",
-                        placeholder="Paste from ICICI"
+                        placeholder="Paste from ICICI (8 digits)"
                     )
+                    
                     if st.form_submit_button("🔑 Connect", type="primary"):
-                        if tok and len(tok.strip()) >= 10:
+                        # FIX: Lowered check to >= 4 to allow 8-digit tokens
+                        if tok and len(tok.strip()) >= 4:
                             # Re-fetch explicitly inside the button action to be safe
                             k, s, _ = Credentials.get_all_credentials()
                             do_login(k, s, tok.strip())
@@ -382,6 +333,7 @@ def render_sidebar():
                             st.warning("Enter valid token")
             else:
                 st.markdown("### 🔐 Login")
+                st.warning("⚠️ No secrets found. Enter keys manually.")
                 with st.form("full_login"):
                     k, s, _ = Credentials.get_all_credentials()
                     nk = st.text_input("API Key", value=k, type="password")
@@ -404,7 +356,14 @@ def render_sidebar():
                 "Debug",
                 value=st.session_state.get("debug_mode", False)
             )
-        st.caption("v8.0.0")
+            
+            # DEBUGGER: Show loaded keys (masked)
+            if has_secrets:
+                k, s, _ = Credentials.get_all_credentials()
+                st.caption(f"Key loaded: {k[:4]}...{k[-4:] if len(k)>8 else ''}")
+                st.caption(f"Secret loaded: {s[:2]}...{s[-2:] if len(s)>4 else ''}")
+                
+        st.caption("v8.0.1")
 
 
 def do_login(api_key, api_secret, token):
@@ -440,7 +399,12 @@ def do_login(api_key, api_secret, token):
                 time.sleep(0.5)
                 st.rerun()
             else:
-                st.error(f"❌ Connection Failed: {resp.get('message')}")
+                st.error(f"❌ Connection Failed: {resp.get('message', 'Unknown error')}")
+                # Common errors hint
+                msg = resp.get('message', '').lower()
+                if 'session' in msg:
+                    st.info("💡 Hint: Session tokens expire daily. Login to ICICI Breeze to get a new one.")
+                
                 if st.session_state.get("debug_mode"):
                     st.json(resp)
         except Exception as e:
