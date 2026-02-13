@@ -1,25 +1,7 @@
-# Core Streamlit
-streamlit>=1.32.0
-
-# Breeze API
-breeze-connect>=1.0.30
-
-# Data Processing
-pandas>=2.1.0
-numpy>=1.24.0
-
-# Date/Time
-pytz>=2023.3
-
-# Analytics & Statistics
-scipy>=1.11.0
-
-# Input Validation
-pydantic>=2.5.0
-
-# Logging (built-in, but specify for clarity)
-# logging is part of Python standard library
-
-# Optional but recommended for production
-# python-dotenv>=1.0.0  # For local .env files
-# redis>=5.0.0          # For distributed caching (if needed)
+streamlit>=1.54.0
+breeze-connect
+pandas
+numpy
+scipy
+pytz
+pydantic
