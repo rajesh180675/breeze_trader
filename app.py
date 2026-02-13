@@ -2,15 +2,7 @@
 Breeze Options Trader - Main Application
 Ultra-Enhanced Production Version v7.0.0
 
-COMPLETE IMPLEMENTATION with:
-- Dashboard with real-time metrics
-- Advanced Option Chain with Greeks
-- Sell Options with margin calculation
-- Square Off with batch operations
-- Orders & Trades management
-- Positions with P&L tracking
-- Strategy Builder with payoff diagrams
-- Analytics with risk metrics
+STREAMLIT 1.54+ COMPATIBLE - Uses width='stretch' instead of use_container_width
 """
 
 import streamlit as st
@@ -23,7 +15,7 @@ import logging
 from typing import Optional, Dict, List, Any, Callable
 import traceback
 
-# Local imports - using your existing modules
+# Local imports
 import app_config as C
 from helpers import (
     APIResponse, safe_int, safe_float, safe_str,
@@ -47,10 +39,6 @@ from analytics import (
     calculate_portfolio_greeks, calculate_strategy_payoff,
     calculate_var, calculate_max_drawdown, calculate_sharpe_ratio,
     calculate_win_rate
-)
-from strategies import (
-    StrategyLeg, PREDEFINED_STRATEGIES, generate_strategy_legs,
-    calculate_strategy_metrics, generate_payoff_data
 )
 
 # ═══════════════════════════════════════════════════════════════════
@@ -81,20 +69,13 @@ st.set_page_config(
         'Report a bug': 'https://github.com/breeze-trader/issues',
         'About': """
         # Breeze Options Trader v7.0
-        
         Professional options trading platform for ICICI Direct Breeze API.
-        
-        **Features:**
-        - Real-time option chains with Greeks
-        - One-click option selling
-        - Multi-leg strategy builder
-        - Portfolio analytics & risk metrics
         """
     }
 )
 
 # ═══════════════════════════════════════════════════════════════════
-# CUSTOM CSS - Enhanced & Responsive
+# CUSTOM CSS
 # ═══════════════════════════════════════════════════════════════════
 
 st.markdown("""
@@ -222,18 +203,6 @@ st.markdown("""
         border: 2px solid var(--warning-color) !important;
     }
     
-    .skeleton {
-        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
-        background-size: 200% 100%;
-        animation: loading 1.5s ease-in-out infinite;
-        border-radius: var(--border-radius);
-    }
-    
-    @keyframes loading {
-        0% { background-position: 200% 0; }
-        100% { background-position: -200% 0; }
-    }
-    
     .empty-state {
         text-align: center;
         padding: 3rem 1rem;
@@ -338,7 +307,7 @@ def check_session_validity(func: Callable) -> Callable:
         if SessionState.is_authenticated():
             if SessionState.is_session_expired():
                 st.error("🔴 Your session has expired. Please reconnect.")
-                if st.button("🔄 Reconnect Now", type="primary", use_container_width=True):
+                if st.button("🔄 Reconnect Now", type="primary", width="stretch"):
                     SessionState.set_authentication(False, None)
                     SessionState.navigate_to("Dashboard")
                     st.rerun()
@@ -374,7 +343,7 @@ def show_empty_state(icon: str, message: str, suggestion: str = "", action_butto
             if st.button(
                 action_button.get("label", "Action"),
                 type=action_button.get("type", "secondary"),
-                use_container_width=True
+                width="stretch"
             ):
                 if "page" in action_button:
                     SessionState.navigate_to(action_button["page"])
@@ -392,7 +361,7 @@ def safe_get_client() -> Optional[BreezeAPIClient]:
     
     if not client.connected:
         st.error("❌ Connection lost. Please reconnect.")
-        if st.button("🔄 Reconnect", use_container_width=True):
+        if st.button("🔄 Reconnect", width="stretch"):
             SessionState.set_authentication(False, None)
             st.rerun()
         return None
@@ -408,7 +377,7 @@ def create_download_button(data: pd.DataFrame, filename: str, label: str = "📥
         data=csv,
         file_name=f"{filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
-        use_container_width=True
+        width="stretch"
     )
 
 
@@ -630,12 +599,12 @@ def render_authenticated_sidebar() -> None:
                     format_currency(cached_margin["available"]),
                     help="Available margin for trading"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Could not fetch margin: {e}")
     
     # Disconnect button
     st.markdown("---")
-    if st.button("🔓 Disconnect", use_container_width=True):
+    if st.button("🔓 Disconnect", width="stretch"):
         SessionState.set_authentication(False, None)
         Credentials.clear_runtime_credentials()
         CacheManager.clear_all()
@@ -735,7 +704,7 @@ def render_welcome_dashboard() -> None:
             "Weekly Expiry": config.expiry_day
         })
     
-    st.dataframe(pd.DataFrame(instruments_data), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(instruments_data), width="stretch", hide_index=True)
     
     st.info("👈 **Login** using the sidebar to access all trading features")
 
@@ -766,6 +735,15 @@ def render_authenticated_dashboard() -> None:
         parsed_funds = APIResponse(funds_response)
         available = safe_float(parsed_funds.get("available_margin", 0))
         used = safe_float(parsed_funds.get("utilized_margin", 0))
+        
+        # Handle case where margins are nested differently
+        if available == 0 and used == 0:
+            # Try alternative field names
+            data = parsed_funds.data
+            if "total_bank_balance" in data:
+                available = safe_float(data.get("unallocated_balance", 0))
+                used = safe_float(data.get("allocated_fno", 0))
+        
         total = available + used
         
         with col1:
@@ -792,7 +770,7 @@ def render_authenticated_dashboard() -> None:
     parsed_positions = APIResponse(positions_response)
     all_positions = parsed_positions.items
     
-    # Filter option positions
+    # Filter option positions using the config helper
     option_positions = []
     for pos in all_positions:
         try:
@@ -802,8 +780,17 @@ def render_authenticated_dashboard() -> None:
             if not C.is_option_position(pos):
                 continue
             option_positions.append(pos)
-        except Exception:
+        except Exception as e:
+            log.debug(f"Skipping position: {e}")
             continue
+    
+    # Debug info
+    if st.session_state.get("debug_mode"):
+        with st.expander("🔧 Debug: All Positions"):
+            st.write(f"Total positions: {len(all_positions)}")
+            st.write(f"Option positions: {len(option_positions)}")
+            for i, pos in enumerate(all_positions[:5]):
+                st.write(f"Position {i+1}: segment={pos.get('segment')}, product_type={pos.get('product_type')}, right={pos.get('right')}")
     
     if not option_positions:
         show_empty_state(
@@ -848,7 +835,7 @@ def render_authenticated_dashboard() -> None:
             col1, col2 = st.columns([3, 1])
             
             with col1:
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_df, width="stretch", hide_index=True)
             
             with col2:
                 pnl_class = "profit" if total_pnl >= 0 else "loss"
@@ -874,22 +861,22 @@ def render_authenticated_dashboard() -> None:
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("📊 Option Chain", use_container_width=True):
+        if st.button("📊 Option Chain", width="stretch"):
             SessionState.navigate_to("Option Chain")
             st.rerun()
     
     with col2:
-        if st.button("💰 Sell Options", use_container_width=True):
+        if st.button("💰 Sell Options", width="stretch"):
             SessionState.navigate_to("Sell Options")
             st.rerun()
     
     with col3:
-        if st.button("🔄 Square Off", use_container_width=True):
+        if st.button("🔄 Square Off", width="stretch"):
             SessionState.navigate_to("Square Off")
             st.rerun()
     
     with col4:
-        if st.button("📋 Orders", use_container_width=True):
+        if st.button("📋 Orders", width="stretch"):
             SessionState.navigate_to("Orders & Trades")
             st.rerun()
     
@@ -898,7 +885,7 @@ def render_authenticated_dashboard() -> None:
     if activity_log:
         st.markdown("---")
         with st.expander("📝 Recent Activity", expanded=False):
-            st.dataframe(pd.DataFrame(activity_log[:10]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(activity_log[:10]), width="stretch", hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -938,7 +925,7 @@ def page_option_chain() -> None:
     
     with col3:
         st.markdown("<br>", unsafe_allow_html=True)
-        refresh_clicked = st.button("🔄 Refresh", use_container_width=True, key="oc_refresh")
+        refresh_clicked = st.button("🔄 Refresh", width="stretch", key="oc_refresh")
     
     # View options
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -1047,15 +1034,15 @@ def page_option_chain() -> None:
     if view_mode == "Traditional":
         pivot_df = create_pivot_table(display_df)
         if not pivot_df.empty:
-            st.dataframe(pivot_df, use_container_width=True, height=600, hide_index=True)
+            st.dataframe(pivot_df, width="stretch", height=600, hide_index=True)
     elif view_mode == "Calls Only":
         calls_df = display_df[display_df["right"] == "Call"] if "right" in display_df.columns else display_df
-        st.dataframe(calls_df, use_container_width=True, height=600, hide_index=True)
+        st.dataframe(calls_df, width="stretch", height=600, hide_index=True)
     elif view_mode == "Puts Only":
         puts_df = display_df[display_df["right"] == "Put"] if "right" in display_df.columns else display_df
-        st.dataframe(puts_df, use_container_width=True, height=600, hide_index=True)
+        st.dataframe(puts_df, width="stretch", height=600, hide_index=True)
     else:
-        st.dataframe(display_df, use_container_width=True, height=600, hide_index=True)
+        st.dataframe(display_df, width="stretch", height=600, hide_index=True)
     
     # OI Chart
     if show_oi and "right" in display_df.columns:
@@ -1128,7 +1115,7 @@ def page_sell_options() -> None:
     with col2:
         st.markdown("### 📊 Market Information")
         
-        if st.button("📊 Get Live Quote", use_container_width=True, disabled=not strike_valid):
+        if st.button("📊 Get Live Quote", width="stretch", disabled=not strike_valid):
             with st.spinner("Fetching quote..."):
                 try:
                     response = client.get_quotes(instrument_config.api_code, instrument_config.exchange, expiry, int(strike), option_code)
@@ -1157,7 +1144,7 @@ def page_sell_options() -> None:
         
         st.markdown("---")
         
-        if st.button("💰 Calculate Margin", use_container_width=True, disabled=not strike_valid):
+        if st.button("💰 Calculate Margin", width="stretch", disabled=not strike_valid):
             with st.spinner("Calculating margin..."):
                 try:
                     response = client.get_margin(instrument_config.api_code, instrument_config.exchange, expiry, int(strike), option_code, "sell", quantity)
@@ -1183,7 +1170,7 @@ def page_sell_options() -> None:
     
     can_submit = risk_acknowledged and strike > 0 and strike_valid and (order_type == "Market" or limit_price > 0)
     
-    if st.button(f"🔴 SELL {quantity:,} {instrument} {strike} {option_code}", type="primary", use_container_width=True, disabled=not can_submit):
+    if st.button(f"🔴 SELL {quantity:,} {instrument} {strike} {option_code}", type="primary", width="stretch", disabled=not can_submit):
         with st.spinner("Placing order..."):
             try:
                 if option_code == "CE":
@@ -1223,7 +1210,7 @@ def page_square_off() -> None:
     
     col1, col2 = st.columns([3, 1])
     with col2:
-        if st.button("🔄 Refresh", use_container_width=True):
+        if st.button("🔄 Refresh", width="stretch"):
             CacheManager.invalidate("positions", "general")
             st.rerun()
     
@@ -1270,8 +1257,12 @@ def page_square_off() -> None:
     
     # Summary
     total_pnl = sum(p["_pnl"] for p in option_positions)
-    st.metric("Open Positions", len(option_positions))
-    st.metric("Total P&L", format_currency(total_pnl))
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Open Positions", len(option_positions))
+    col2.metric("Total P&L", format_currency(total_pnl))
+    long_count = sum(1 for p in option_positions if p["_position_type"] == "long")
+    col3.metric("Long/Short", f"{long_count} / {len(option_positions) - long_count}")
     
     # Position table
     position_rows = []
@@ -1290,7 +1281,7 @@ def page_square_off() -> None:
             "Action": pos["_closing_action"].upper()
         })
     
-    st.dataframe(pd.DataFrame(position_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(position_rows), width="stretch", hide_index=True)
     
     st.markdown("---")
     
@@ -1316,7 +1307,7 @@ def page_square_off() -> None:
     sq_quantity = st.slider("Quantity to Close", min_value=1, max_value=selected_position["_quantity"], value=selected_position["_quantity"], key="sq_qty")
     
     action_label = selected_position['_closing_action'].upper()
-    if st.button(f"🔄 {action_label} {sq_quantity} to Close", type="primary", use_container_width=True):
+    if st.button(f"🔄 {action_label} {sq_quantity} to Close", type="primary", width="stretch"):
         with st.spinner(f"Executing {action_label} order..."):
             try:
                 response = client.square_off(
@@ -1353,7 +1344,7 @@ def page_square_off() -> None:
     
     confirm_text = st.text_input("Type 'CLOSE ALL' to confirm", key="sq_all_confirm")
     
-    if st.button(f"🔴 SQUARE OFF ALL {len(option_positions)} POSITIONS", type="primary", use_container_width=True, disabled=confirm_text.upper() != "CLOSE ALL"):
+    if st.button(f"🔴 SQUARE OFF ALL {len(option_positions)} POSITIONS", type="primary", width="stretch", disabled=confirm_text.upper() != "CLOSE ALL"):
         results = client.square_off_all_positions()
         success_count = sum(1 for r in results if r.get("success"))
         
@@ -1395,7 +1386,7 @@ def page_orders_trades() -> None:
             to_date = st.date_input("To", value=date.today(), key="orders_to")
         with col4:
             st.markdown("<br>", unsafe_allow_html=True)
-            st.button("🔄", key="orders_refresh", use_container_width=True)
+            st.button("🔄", key="orders_refresh", width="stretch")
         
         try:
             validate_date_range(from_date, to_date)
@@ -1417,7 +1408,7 @@ def page_orders_trades() -> None:
             if not orders:
                 show_empty_state("📭", "No orders found", "")
             else:
-                st.dataframe(pd.DataFrame(orders), use_container_width=True, height=400, hide_index=True)
+                st.dataframe(pd.DataFrame(orders), width="stretch", height=400, hide_index=True)
     
     with tab2:
         st.markdown("### Trade Book")
@@ -1432,7 +1423,7 @@ def page_orders_trades() -> None:
             if not trades:
                 show_empty_state("📭", "No trades found", "")
             else:
-                st.dataframe(pd.DataFrame(trades), use_container_width=True, height=400, hide_index=True)
+                st.dataframe(pd.DataFrame(trades), width="stretch", height=400, hide_index=True)
     
     with tab3:
         st.markdown("### Session Activity Log")
@@ -1441,7 +1432,7 @@ def page_orders_trades() -> None:
         if not activity_log:
             show_empty_state("📝", "No activity logged", "")
         else:
-            st.dataframe(pd.DataFrame(activity_log), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(activity_log), width="stretch", hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1459,7 +1450,7 @@ def page_positions() -> None:
     if not client:
         return
     
-    if st.button("🔄 Refresh", use_container_width=True):
+    if st.button("🔄 Refresh", width="stretch"):
         CacheManager.clear_all()
         st.rerun()
     
@@ -1528,7 +1519,7 @@ def page_positions() -> None:
             "P&L": f"{pnl_emoji} ₹{pos['pnl']:+,.2f}"
         })
     
-    st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(table_data), width="stretch", hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1546,77 +1537,29 @@ def page_strategy_builder() -> None:
     if not client:
         return
     
-    tab1, tab2 = st.tabs(["📚 Predefined Strategies", "🛠️ Custom Builder"])
+    st.info("🚧 **Strategy Builder** - Coming Soon!")
     
-    with tab1:
-        st.markdown("### Select a Predefined Strategy")
-        
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            strategy_name = st.selectbox("Strategy", list(PREDEFINED_STRATEGIES.keys()), key="strategy_name")
-            
-            instrument = st.selectbox("Instrument", list(C.INSTRUMENTS.keys()), key="strat_instrument")
-            instrument_config = C.get_instrument(instrument)
-            
-            expiries = C.get_next_expiries(instrument, 5)
-            expiry = st.selectbox("Expiry", expiries, format_func=format_expiry, key="strat_expiry")
-            
-            atm_strike = st.number_input(
-                "ATM Strike",
-                min_value=int(instrument_config.min_strike),
-                max_value=int(instrument_config.max_strike),
-                value=int((instrument_config.min_strike + instrument_config.max_strike) / 2),
-                step=int(instrument_config.strike_gap),
-                key="strat_atm"
-            )
-            
-            lots = st.number_input("Lots per Leg", min_value=1, max_value=C.MAX_LOTS_PER_ORDER, value=1, key="strat_lots")
-        
-        with col2:
-            strategy_info = PREDEFINED_STRATEGIES.get(strategy_name, {})
-            
-            st.markdown(f"### {strategy_name}")
-            st.markdown(strategy_info.get("description", "Strategy description"))
-            
-            st.markdown("**Characteristics:**")
-            chars = strategy_info.get("characteristics", {})
-            st.write(f"🎯 **Max Profit:** {chars.get('max_profit', 'Limited')}")
-            st.write(f"📉 **Max Loss:** {chars.get('max_loss', 'Limited')}")
-            st.write(f"📊 **Market View:** {chars.get('market_view', 'Neutral')}")
-            
-            st.markdown("---")
-            
-            if st.button("🔧 Configure Strategy", use_container_width=True):
-                try:
-                    legs = generate_strategy_legs(
-                        strategy_name=strategy_name,
-                        atm_strike=atm_strike,
-                        strike_gap=instrument_config.strike_gap,
-                        lot_size=instrument_config.lot_size,
-                        lots=lots
-                    )
-                    
-                    st.session_state.strategy_legs = legs
-                    st.success(f"✅ Generated {len(legs)} legs")
-                except Exception as e:
-                    st.error(f"❌ Could not configure: {e}")
-            
-            if st.session_state.get("strategy_legs"):
-                legs = st.session_state.strategy_legs
-                
-                st.markdown("### Strategy Legs")
-                for idx, leg in enumerate(legs):
-                    action_emoji = "🟢" if leg.action == "buy" else "🔴"
-                    leg_class = "buy" if leg.action == "buy" else "sell"
-                    st.markdown(
-                        f'<div class="leg-card {leg_class}"><strong>Leg {idx + 1}:</strong> {action_emoji} {leg.action.upper()} {leg.strike} {leg.option_type} × {leg.quantity}</div>',
-                        unsafe_allow_html=True
-                    )
+    st.markdown("""
+    ### Planned Features:
     
-    with tab2:
-        st.markdown("### Build Custom Strategy")
-        st.info("🚧 Custom strategy builder coming soon!")
+    **Predefined Strategies:**
+    - Bull Call Spread
+    - Bear Put Spread  
+    - Iron Condor
+    - Short Straddle
+    - Short Strangle
+    - Iron Butterfly
+    
+    **Analysis:**
+    - Payoff diagram
+    - Breakeven calculation
+    - Max profit/loss
+    - Probability of profit
+    
+    **Execution:**
+    - One-click strategy execution
+    - Automatic leg management
+    """)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1639,7 +1582,7 @@ def page_analytics() -> None:
     with tab1:
         st.markdown("### Portfolio Greeks Summary")
         
-        with st.spinner("Calculating Greeks..."):
+        with st.spinner("Loading positions for Greeks calculation..."):
             response = client.get_positions()
         
         if not response["success"]:
@@ -1718,7 +1661,7 @@ def main() -> None:
         
         if SessionState.is_authenticated() and SessionState.is_session_expired():
             st.error("🔴 Session expired. Please reconnect.")
-            if st.button("🔄 Reconnect", type="primary", use_container_width=True):
+            if st.button("🔄 Reconnect", type="primary", width="stretch"):
                 SessionState.set_authentication(False, None)
                 SessionState.navigate_to("Dashboard")
                 st.rerun()
