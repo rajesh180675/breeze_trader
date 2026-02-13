@@ -1,8 +1,3 @@
-
-
-# Complete `app.py` — Copy-Paste Ready
-
-```python
 """
 Breeze Options Trader v8.0 — Main Application
 Fixes: retry logic, double-click protection, real spot prices,
