@@ -661,7 +661,11 @@ def render_welcome_dashboard():
 
 
 def render_authenticated_dashboard():
-    """Dashboard for authenticated users."""
+    """
+    Dashboard for authenticated users.
+    
+    FIXED: Filters out equity positions before processing options
+    """
     client = SessionState.get_client()
     
     # Portfolio summary
@@ -699,20 +703,20 @@ def render_authenticated_dashboard():
         parsed_positions = APIResponse(positions_response)
         all_positions = parsed_positions.items
         
-        # Filter active positions
-        active_positions = [
+        # FIXED: Filter for OPTION positions only (exclude equity)
+        option_positions = [
             p for p in all_positions
-            if safe_int(p.get("quantity", 0)) != 0
+            if safe_int(p.get("quantity", 0)) != 0 and C.is_option_position(p)
         ]
         
-        if not active_positions:
-            st.info("📭 No open positions")
+        if not option_positions:
+            st.info("📭 No open option positions")
         else:
             # Calculate aggregates
             total_pnl = 0.0
             position_rows = []
             
-            for pos in active_positions:
+            for pos in option_positions:
                 qty = safe_int(pos.get("quantity", 0))
                 pos_type = detect_position_type(pos)
                 avg_price = safe_float(pos.get("average_price", 0))
@@ -721,10 +725,11 @@ def render_authenticated_dashboard():
                 pnl = calculate_pnl(pos_type, avg_price, ltp, qty)
                 total_pnl += pnl
                 
+                # FIXED: Option type is guaranteed to exist for option positions
                 position_rows.append({
                     "Instrument": C.api_code_to_display(pos.get("stock_code", "")),
                     "Strike": pos.get("strike_price"),
-                    "Type": C.normalize_option_type(pos.get("right", "")),
+                    "Type": C.normalize_option_type(pos.get("right")),
                     "Position": pos_type.upper(),
                     "Qty": abs(qty),
                     "Avg": f"₹{avg_price:.2f}",
@@ -765,7 +770,7 @@ def render_authenticated_dashboard():
                 )
                 
                 # Position count
-                st.metric("Positions", len(active_positions))
+                st.metric("Positions", len(option_positions))
                 
                 # Position breakdown
                 long_count = sum(1 for p in position_rows if p["Position"] == "LONG")
@@ -814,220 +819,158 @@ def render_authenticated_dashboard():
             )
 
 
-# ═══════════════════════════════════════════════════════════════════
-# PAGE: OPTION CHAIN
-# ═══════════════════════════════════════════════════════════════════
-
 @error_handler
 @require_auth
-def page_option_chain():
-    """Advanced option chain with Greeks and analytics."""
-    st.markdown('<h1 class="page-header">📊 Option Chain</h1>', unsafe_allow_html=True)
+def page_positions():
+    """
+    Detailed positions view with analytics.
+    
+    FIXED: Filters out equity positions before processing
+    """
+    st.markdown('<h1 class="page-header">📍 Positions</h1>', unsafe_allow_html=True)
     
     client = SessionState.get_client()
     
-    # Controls row 1
-    col1, col2, col3 = st.columns([2, 2, 1])
+    # Refresh button
+    if st.button("🔄 Refresh Positions", use_container_width=True):
+        CacheManager.clear_all("positions")
+        st.rerun()
     
-    with col1:
-        instrument = st.selectbox(
-            "Instrument",
-            list(C.INSTRUMENTS.keys()),
-            key="oc_instrument"
-        )
+    # Fetch positions
+    with st.spinner("Loading positions..."):
+        response = client.get_positions()
     
-    instrument_config = C.get_instrument(instrument)
+    if not response["success"]:
+        st.error(f"❌ {response['message']}")
+        return
     
-    with col2:
-        expiries = C.get_next_expiries(instrument, 5)
-        expiry = st.selectbox(
-            "Expiry",
-            expiries,
-            format_func=format_expiry,
-            key="oc_expiry"
-        )
+    parsed = APIResponse(response)
+    all_positions = parsed.items
     
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        refresh_clicked = st.button("🔄 Refresh", use_container_width=True, key="oc_refresh")
+    # FIXED: Filter for OPTIONS only
+    active_positions = []
+    total_pnl = 0.0
     
-    # Controls row 2
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        view_mode = st.radio(
-            "View Mode",
-            ["Traditional", "Flat", "Calls Only", "Puts Only"],
-            horizontal=True,
-            key="oc_view"
-        )
-    
-    with col2:
-        strikes_count = st.slider(
-            "Strikes Around ATM",
-            5, 50, 15,
-            key="oc_strikes"
-        )
-    
-    with col3:
-        show_greeks = st.checkbox(
-            "Show Greeks",
-            value=True,
-            key="oc_greeks"
-        )
-    
-    # Fetch option chain
-    cache_key = f"{instrument_config.api_code}_{expiry}"
-    
-    if refresh_clicked:
-        CacheManager.invalidate(cache_key, "option_chain")
-    
-    cached_df = CacheManager.get_option_chain(instrument_config.api_code, expiry)
-    
-    if cached_df is not None:
-        df = cached_df
-        st.caption("📦 Using cached data (30s TTL)")
-    else:
-        with st.spinner(f"Loading {instrument} option chain..."):
-            response = client.get_option_chain(
-                instrument_config.api_code,
-                instrument_config.exchange,
-                expiry
-            )
+    for pos in all_positions:
+        # Skip if not an option position
+        if not C.is_option_position(pos):
+            continue
         
-        if not response["success"]:
-            st.error(f"❌ Failed to fetch option chain: {response['message']}")
-            if st.session_state.get("debug_mode"):
-                st.json(response)
-            return
+        qty = safe_int(pos.get("quantity", 0))
+        if qty == 0:
+            continue
         
-        df = process_option_chain(response["data"])
+        pos_type = detect_position_type(pos)
+        avg_price = safe_float(pos.get("average_price", 0))
+        ltp = safe_float(pos.get("ltp", avg_price))
+        pnl = calculate_pnl(pos_type, avg_price, ltp, qty)
         
-        if df.empty:
-            st.warning("No option chain data available")
-            if st.session_state.get("debug_mode"):
-                st.write("Response data:", response.get("data", {}).keys())
-            return
+        total_pnl += pnl
         
-        # Cache the data
-        CacheManager.cache_option_chain(instrument_config.api_code, expiry, df)
-        SessionState.log_activity("Option Chain", f"{instrument} {format_expiry(expiry)}")
+        active_positions.append({
+            "stock_code": pos.get("stock_code"),
+            "display_name": C.api_code_to_display(pos.get("stock_code", "")),
+            "exchange": pos.get("exchange_code"),
+            "expiry": pos.get("expiry_date"),
+            "strike": pos.get("strike_price"),
+            "option_type": C.normalize_option_type(pos.get("right")),
+            "position_type": pos_type,
+            "quantity": abs(qty),
+            "avg_price": avg_price,
+            "ltp": ltp,
+            "pnl": pnl,
+            "raw": pos
+        })
     
-    # Calculate metrics
-    st.markdown(f"### {instrument} ({instrument_config.api_code}) — {format_expiry(expiry)}")
+    if not active_positions:
+        st.info("📭 No active option positions")
+        return
     
-    # Days to expiry
-    days_left = calculate_days_to_expiry(expiry)
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
     
-    # Metrics row
-    pcr = calculate_pcr(df)
-    max_pain = calculate_max_pain(df)
-    atm_strike = estimate_atm_strike(df)
+    long_count = sum(1 for p in active_positions if p["position_type"] == "long")
+    short_count = len(active_positions) - long_count
     
-    call_oi = df[df["right"] == "Call"]["open_interest"].sum() if "right" in df.columns else 0
-    put_oi = df[df["right"] == "Put"]["open_interest"].sum() if "right" in df.columns else 0
+    col1.metric("Total Positions", len(active_positions))
+    col2.metric("Long Positions", long_count)
+    col3.metric("Short Positions", short_count)
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    pnl_color = "normal" if total_pnl >= 0 else "inverse"
+    col4.metric("Total P&L", format_currency(total_pnl), delta_color=pnl_color)
     
-    with col1:
-        pcr_sentiment = "Bullish" if pcr > 1 else "Bearish"
-        st.metric("PCR", f"{pcr:.2f}", pcr_sentiment)
-    
-    with col2:
-        st.metric("Max Pain", f"{max_pain:,.0f}")
-    
-    with col3:
-        st.metric("ATM ≈", f"{atm_strike:,.0f}")
-    
-    with col4:
-        st.metric("Days to Expiry", days_left)
-    
-    with col5:
-        st.metric("Call OI", f"{call_oi:,.0f}")
-    
+    # Positions table
     st.markdown("---")
     
-    # Filter strikes around ATM
-    if "strike_price" in df.columns and atm_strike > 0:
-        strikes = sorted(df["strike_price"].unique())
-        atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm_strike))
-        
-        start_idx = max(0, atm_idx - strikes_count)
-        end_idx = min(len(strikes), atm_idx + strikes_count + 1)
-        
-        filtered_strikes = strikes[start_idx:end_idx]
-        display_df = df[df["strike_price"].isin(filtered_strikes)].copy()
-    else:
-        display_df = df.copy()
+    table_data = []
+    for pos in active_positions:
+        table_data.append({
+            "Instrument": pos["display_name"],
+            "Strike": pos["strike"],
+            "Type": pos["option_type"],
+            "Position": pos["position_type"].upper(),
+            "Qty": pos["quantity"],
+            "Avg Price": f"₹{pos['avg_price']:.2f}",
+            "LTP": f"₹{pos['ltp']:.2f}",
+            "P&L": f"₹{pos['pnl']:+,.2f}",
+            "Close": get_closing_action(pos["position_type"]).upper()
+        })
     
-    # Add Greeks if requested
-    if show_greeks and not display_df.empty:
-        display_df = add_greeks_to_chain(display_df, atm_strike, expiry)
+    st.dataframe(
+        pd.DataFrame(table_data),
+        use_container_width=True,
+        hide_index=True
+    )
     
-    # Display based on view mode
-    if view_mode == "Traditional":
-        pivot_df = create_pivot_table(display_df)
-        
-        if pivot_df.empty:
-            st.warning("Cannot create pivot view")
-        else:
-            # Highlight ATM strike
-            def highlight_atm_row(row):
-                if abs(row.get("Strike", 0) - atm_strike) < instrument_config.strike_gap / 2:
-                    return ['background-color: #fff3cd; font-weight: bold'] * len(row)
-                return [''] * len(row)
-            
-            styled = pivot_df.style.apply(highlight_atm_row, axis=1)
-            
-            # Format numeric columns
-            numeric_cols = [c for c in pivot_df.columns if c != "Strike"]
-            format_dict = {col: "{:,.0f}" for col in numeric_cols}
-            styled = styled.format(format_dict)
-            
-            st.dataframe(
-                styled,
-                use_container_width=True,
-                height=600,
-                hide_index=True
-            )
-    
-    elif view_mode == "Calls Only":
-        calls_df = display_df[display_df["right"] == "Call"] if "right" in display_df.columns else display_df
-        render_flat_option_chain(calls_df, show_greeks)
-    
-    elif view_mode == "Puts Only":
-        puts_df = display_df[display_df["right"] == "Put"] if "right" in display_df.columns else display_df
-        render_flat_option_chain(puts_df, show_greeks)
-    
-    else:  # Flat view
-        render_flat_option_chain(display_df, show_greeks)
-    
-    # OI Distribution Chart
-    if "right" in display_df.columns and "open_interest" in display_df.columns:
-        st.markdown("---")
-        st.markdown('<h3 class="section-header">Open Interest Distribution</h3>', unsafe_allow_html=True)
-        
-        calls_oi = display_df[display_df["right"] == "Call"][["strike_price", "open_interest"]].rename(
-            columns={"open_interest": "Call OI"}
-        )
-        puts_oi = display_df[display_df["right"] == "Put"][["strike_price", "open_interest"]].rename(
-            columns={"open_interest": "Put OI"}
-        )
-        
-        oi_chart_df = pd.merge(calls_oi, puts_oi, on="strike_price", how="outer").fillna(0)
-        oi_chart_df = oi_chart_df.sort_values("strike_price").set_index("strike_price")
-        
-        st.bar_chart(oi_chart_df)
-    
-    # Debug info
+    # Debug mode
     if st.session_state.get("debug_mode"):
-        with st.expander("🔧 Debug Information"):
-            st.write(f"Total rows: {len(df)}")
-            if "right" in df.columns:
-                st.write(f"Calls: {len(df[df['right']=='Call'])}")
-                st.write(f"Puts: {len(df[df['right']=='Put'])}")
-            st.write("First 10 rows:")
-            st.dataframe(df.head(10), use_container_width=True)
+        with st.expander("🔧 Raw Position Data"):
+            for pos in active_positions:
+                st.json(pos["raw"])
+    
+    # Individual position details
+    st.markdown("---")
+    st.markdown('<h2 class="section-header">Position Details</h2>', unsafe_allow_html=True)
+    
+    for pos in active_positions:
+        pnl_emoji = "📈" if pos["pnl"] >= 0 else "📉"
+        pos_badge = "🟢 LONG" if pos["position_type"] == "long" else "🔴 SHORT"
+        
+        with st.expander(
+            f"{pnl_emoji} {pos['display_name']} {pos['strike']} {pos['option_type']} | "
+            f"{pos_badge} | {format_currency(pos['pnl'])}"
+        ):
+            detail_col1, detail_col2, detail_col3 = st.columns(3)
+            
+            with detail_col1:
+                st.write(f"**Stock Code:** {pos['stock_code']}")
+                st.write(f"**Exchange:** {pos['exchange']}")
+                st.write(f"**Expiry:** {format_expiry(pos['expiry'])}")
+            
+            with detail_col2:
+                st.write(f"**Position:** {pos['position_type'].upper()}")
+                st.write(f"**Quantity:** {pos['quantity']}")
+                st.write(f"**Average Price:** ₹{pos['avg_price']:.2f}")
+            
+            with detail_col3:
+                st.write(f"**Current LTP:** ₹{pos['ltp']:.2f}")
+                
+                pnl_class = "profit" if pos["pnl"] >= 0 else "loss"
+                st.markdown(
+                    f'<p class="{pnl_class}">P&L: {format_currency(pos["pnl"])}</p>',
+                    unsafe_allow_html=True
+                )
+                
+                st.write(f"**To Close:** {get_closing_action(pos['position_type']).upper()}")
+            
+            # Quick square off button
+            if st.button(
+                "🔄 Square Off This Position",
+                key=f"sq_btn_{pos['stock_code']}_{pos['strike']}_{pos['option_type']}",
+                use_container_width=True
+            ):
+                SessionState.navigate_to("Square Off")
+                st.rerun()
 
 
 def render_flat_option_chain(df: pd.DataFrame, show_greeks: bool):
