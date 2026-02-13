@@ -1,6 +1,4 @@
-"""
-Strategy Builder — predefined strategies, leg generation, payoff calculation.
-"""
+"""Strategy Builder — predefined strategies, leg generation, payoff."""
 
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
@@ -11,8 +9,8 @@ import pandas as pd
 @dataclass
 class StrategyLeg:
     strike: int
-    option_type: str   # 'CE' or 'PE'
-    action: str        # 'buy' or 'sell'
+    option_type: str
+    action: str
     quantity: int
     premium: float = 0.0
 
@@ -45,7 +43,7 @@ PREDEFINED_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "view": "Neutral", "risk": "Limited", "reward": "Limited (premium)"
     },
     "Iron Butterfly": {
-        "description": "Sell ATM straddle + buy OTM strangle. Max profit at ATM.",
+        "description": "Sell ATM straddle + buy OTM strangle.",
         "legs": [
             {"offset": -2, "type": "PE", "action": "buy"},
             {"offset": 0, "type": "PE", "action": "sell"},
@@ -55,7 +53,7 @@ PREDEFINED_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "view": "Neutral", "risk": "Limited", "reward": "Limited (premium)"
     },
     "Bull Call Spread": {
-        "description": "Buy lower call + sell higher call. Moderately bullish.",
+        "description": "Buy lower call + sell higher call.",
         "legs": [
             {"offset": -1, "type": "CE", "action": "buy"},
             {"offset": 1, "type": "CE", "action": "sell"},
@@ -63,7 +61,7 @@ PREDEFINED_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "view": "Bullish", "risk": "Limited", "reward": "Limited"
     },
     "Bear Put Spread": {
-        "description": "Buy higher put + sell lower put. Moderately bearish.",
+        "description": "Buy higher put + sell lower put.",
         "legs": [
             {"offset": 1, "type": "PE", "action": "buy"},
             {"offset": -1, "type": "PE", "action": "sell"},
@@ -71,7 +69,7 @@ PREDEFINED_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "view": "Bearish", "risk": "Limited", "reward": "Limited"
     },
     "Long Straddle": {
-        "description": "Buy ATM Call + ATM Put. Profit from big moves either way.",
+        "description": "Buy ATM Call + ATM Put. Profit from big moves.",
         "legs": [
             {"offset": 0, "type": "CE", "action": "buy"},
             {"offset": 0, "type": "PE", "action": "buy"},
@@ -81,7 +79,9 @@ PREDEFINED_STRATEGIES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def generate_strategy_legs(strategy_name: str, atm_strike: int, strike_gap: int, lot_size: int, lots: int = 1) -> List[StrategyLeg]:
+def generate_strategy_legs(strategy_name: str, atm_strike: int,
+                           strike_gap: int, lot_size: int,
+                           lots: int = 1) -> List[StrategyLeg]:
     strat = PREDEFINED_STRATEGIES.get(strategy_name)
     if not strat:
         raise ValueError(f"Unknown strategy: {strategy_name}")
@@ -96,29 +96,31 @@ def generate_strategy_legs(strategy_name: str, atm_strike: int, strike_gap: int,
 
 
 def calculate_strategy_metrics(legs: List[StrategyLeg]) -> Dict[str, Any]:
-    """Calculate strategy metrics from legs with premiums filled."""
     net_premium = sum(
         (leg.premium * leg.quantity if leg.action == "sell" else -leg.premium * leg.quantity)
         for leg in legs
     )
     all_strikes = [l.strike for l in legs]
-    low = min(all_strikes) - 10 * (max(all_strikes) - min(all_strikes) + 100)
-    high = max(all_strikes) + 10 * (max(all_strikes) - min(all_strikes) + 100)
+    spread = max(all_strikes) - min(all_strikes) + 100
+    low = min(all_strikes) - 10 * spread
+    high = max(all_strikes) + 10 * spread
     spots = np.linspace(low, high, 500)
     payoffs = _calc_payoffs(legs, spots)
     breakevens = []
     for i in range(len(payoffs) - 1):
         if payoffs[i] * payoffs[i + 1] < 0:
-            breakevens.append(round(spots[i], 0))
+            be = spots[i] - payoffs[i] * (spots[i + 1] - spots[i]) / (payoffs[i + 1] - payoffs[i])
+            breakevens.append(round(float(be), 0))
     return {
         "net_premium": round(net_premium, 2),
-        "max_profit": round(max(payoffs), 2),
-        "max_loss": round(min(payoffs), 2),
+        "max_profit": round(float(max(payoffs)), 2),
+        "max_loss": round(float(min(payoffs)), 2),
         "breakevens": breakevens,
     }
 
 
-def generate_payoff_data(legs: List[StrategyLeg], center: float, gap: int, points: int = 200) -> Optional[pd.DataFrame]:
+def generate_payoff_data(legs: List[StrategyLeg], center: float,
+                         gap: int, points: int = 200) -> Optional[pd.DataFrame]:
     if not legs:
         return None
     all_strikes = [l.strike for l in legs]
