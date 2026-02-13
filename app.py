@@ -1,6 +1,7 @@
 """
 Breeze Options Trader v8.0 — Main Application
-Fixes: Token validation length, API Key fetching debug, connection retry logic.
+Fixes: UnboundLocalError in sidebar, retry logic, real spot prices,
+       persistent trade logging, background risk monitoring.
 """
 
 import streamlit as st
@@ -247,6 +248,9 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("## 📈 Breeze Trader")
         st.markdown("---")
+        
+        # Check secrets availability immediately at top level scope
+        has_secrets = Credentials.has_stored_credentials()
 
         avail = PAGES if SessionState.is_authenticated() else ["Dashboard"]
         cur = SessionState.get_current_page()
@@ -311,8 +315,6 @@ def render_sidebar():
                 st.rerun()
 
         else:
-            has_secrets = Credentials.has_stored_credentials()
-            
             if has_secrets:
                 st.markdown("### 🔑 Daily Login")
                 st.success("✅ API Keys loaded from secrets")
@@ -324,9 +326,7 @@ def render_sidebar():
                     )
                     
                     if st.form_submit_button("🔑 Connect", type="primary"):
-                        # FIX: Lowered check to >= 4 to allow 8-digit tokens
                         if tok and len(tok.strip()) >= 4:
-                            # Re-fetch explicitly inside the button action to be safe
                             k, s, _ = Credentials.get_all_credentials()
                             do_login(k, s, tok.strip())
                         else:
@@ -357,24 +357,18 @@ def render_sidebar():
                 value=st.session_state.get("debug_mode", False)
             )
             
-            # DEBUGGER: Show loaded keys (masked)
+            # DEBUGGER: Show loaded keys status (safe)
             if has_secrets:
                 k, s, _ = Credentials.get_all_credentials()
                 st.caption(f"Key loaded: {k[:4]}...{k[-4:] if len(k)>8 else ''}")
-                st.caption(f"Secret loaded: {s[:2]}...{s[-2:] if len(s)>4 else ''}")
                 
-        st.caption("v8.0.1")
+        st.caption("v8.0.2")
 
 
 def do_login(api_key, api_secret, token):
-    # Validate inputs before attempting connection
     if not api_key or not api_secret:
         st.error("❌ Missing API Keys. Check secrets.toml or enter manually.")
         return
-
-    if st.session_state.get("debug_mode"):
-        masked_key = api_key[:4] + "*" * 4 if len(api_key) > 4 else "****"
-        st.write(f"Debug: Attempting connect with Key={masked_key}")
 
     with st.spinner("Connecting..."):
         try:
@@ -400,9 +394,7 @@ def do_login(api_key, api_secret, token):
                 st.rerun()
             else:
                 st.error(f"❌ Connection Failed: {resp.get('message', 'Unknown error')}")
-                # Common errors hint
-                msg = resp.get('message', '').lower()
-                if 'session' in msg:
+                if 'session' in resp.get('message', '').lower():
                     st.info("💡 Hint: Session tokens expire daily. Login to ICICI Breeze to get a new one.")
                 
                 if st.session_state.get("debug_mode"):
@@ -1957,3 +1949,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
