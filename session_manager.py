@@ -13,32 +13,58 @@ log = logging.getLogger(__name__)
 class Credentials:
     @staticmethod
     def get_stored_api_key():
+        """Safely fetch API Key from secrets."""
         try:
-            return st.secrets.get("BREEZE_API_KEY", "")
+            # Check strictly for the key in secrets
+            if "BREEZE_API_KEY" in st.secrets:
+                return str(st.secrets["BREEZE_API_KEY"]).strip()
+            return ""
         except Exception:
             return ""
 
     @staticmethod
     def get_stored_api_secret():
+        """Safely fetch API Secret from secrets."""
         try:
-            return st.secrets.get("BREEZE_API_SECRET", "")
+            if "BREEZE_API_SECRET" in st.secrets:
+                return str(st.secrets["BREEZE_API_SECRET"]).strip()
+            return ""
         except Exception:
             return ""
 
     @staticmethod
     def has_stored_credentials():
-        return bool(Credentials.get_stored_api_key() and Credentials.get_stored_api_secret())
+        """Check if both keys exist in secrets."""
+        k = Credentials.get_stored_api_key()
+        s = Credentials.get_stored_api_secret()
+        return bool(k and s)
 
     @staticmethod
     def get_all_credentials() -> Tuple[str, str, str]:
+        """
+        Get credentials with priority: 
+        1. Secrets (if available)
+        2. Session State (runtime input)
+        """
+        # Try secrets first
+        api_key = Credentials.get_stored_api_key()
+        api_secret = Credentials.get_stored_api_secret()
+
+        # Fallback to session state if secrets missing
+        if not api_key:
+            api_key = st.session_state.get("api_key", "")
+        if not api_secret:
+            api_secret = st.session_state.get("api_secret", "")
+
         return (
-            Credentials.get_stored_api_key() or st.session_state.get("api_key", ""),
-            Credentials.get_stored_api_secret() or st.session_state.get("api_secret", ""),
+            api_key,
+            api_secret,
             st.session_state.get("session_token", "")
         )
 
     @staticmethod
     def save_runtime_credentials(api_key, api_secret, session_token):
+        """Save manual inputs to session state."""
         st.session_state.api_key = api_key
         st.session_state.api_secret = api_secret
         st.session_state.session_token = session_token
