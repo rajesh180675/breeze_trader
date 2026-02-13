@@ -362,9 +362,12 @@ def render_sidebar():
                 st.rerun()
 
         else:
-            has = Credentials.has_stored_credentials()
-            if has:
+            # Login Form Logic
+            has_secrets = Credentials.has_stored_credentials()
+            
+            if has_secrets:
                 st.markdown("### 🔑 Daily Login")
+                st.info("API Keys found in secrets")
                 with st.form("quick_login"):
                     tok = st.text_input(
                         "Session Token", type="password",
@@ -372,6 +375,7 @@ def render_sidebar():
                     )
                     if st.form_submit_button("🔑 Connect", type="primary"):
                         if tok and len(tok.strip()) >= 10:
+                            # Re-fetch explicitly inside the button action to be safe
                             k, s, _ = Credentials.get_all_credentials()
                             do_login(k, s, tok.strip())
                         else:
@@ -404,10 +408,20 @@ def render_sidebar():
 
 
 def do_login(api_key, api_secret, token):
+    # Validate inputs before attempting connection
+    if not api_key or not api_secret:
+        st.error("❌ Missing API Keys. Check secrets.toml or enter manually.")
+        return
+
+    if st.session_state.get("debug_mode"):
+        masked_key = api_key[:4] + "*" * 4 if len(api_key) > 4 else "****"
+        st.write(f"Debug: Attempting connect with Key={masked_key}")
+
     with st.spinner("Connecting..."):
         try:
             client = BreezeAPIClient(api_key, api_secret)
             resp = client.connect(token)
+            
             if resp["success"]:
                 Credentials.save_runtime_credentials(
                     api_key, api_secret, token
@@ -426,9 +440,13 @@ def do_login(api_key, api_secret, token):
                 time.sleep(0.5)
                 st.rerun()
             else:
-                st.error(f"❌ {resp.get('message')}")
+                st.error(f"❌ Connection Failed: {resp.get('message')}")
+                if st.session_state.get("debug_mode"):
+                    st.json(resp)
         except Exception as e:
-            st.error(f"❌ {e}")
+            st.error(f"❌ Error: {str(e)}")
+            if st.session_state.get("debug_mode"):
+                st.exception(e)
 
 
 # ═══════════════════════════════════════════════════════════════
